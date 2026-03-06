@@ -64,6 +64,7 @@ export default function Summarizer() {
 
   return (
     <section id="summarizer" className="px-4 py-12 sm:px-6 sm:py-16">
+      <h2 className="sr-only">Article &amp; URL Summarizer Tool</h2>
       <div className="mx-auto max-w-3xl">
         {/* Input */}
         <div className="flex gap-3">
