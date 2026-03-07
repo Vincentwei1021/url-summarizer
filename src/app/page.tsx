@@ -46,7 +46,7 @@ const webAppSchema = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
   name: "SummarizeIt",
-  url: "https://summarize-it.dev",
+  url: "https://summarize.toolboxlite.com",
   description:
     "Free online article summarizer and URL summary tool. Paste any URL and get an instant summary with key takeaways powered by AI.",
   applicationCategory: "UtilityApplication",

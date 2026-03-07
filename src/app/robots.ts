@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
 export default function robots(): MetadataRoute.Robots {
-  const base = process.env.NEXT_PUBLIC_SITE_URL || "https://summarize-it.dev";
+  const base = process.env.NEXT_PUBLIC_SITE_URL || "https://summarize.toolboxlite.com";
   return {
     rules: [{ userAgent: "*", allow: "/" }],
     sitemap: `${base}/sitemap.xml`,
