@@ -13,49 +13,109 @@ const STOPWORDS = new Set([
   "own","same","so","very","just","also","over","after","before","between",
 ]);
 
-/** Split text into chunks that look like sentences or meaningful segments. */
-function splitIntoSegments(text: string): string[] {
-  // Normalize whitespace
-  const cleaned = text.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
-
-  // First try splitting on sentence-ending punctuation
-  const sentenceSplit = cleaned.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
-
-  // Also split on other boundaries for non-article content (nav text, bullet points)
-  if (sentenceSplit.length < 3) {
-    // Fallback: split on periods, newlines, semicolons, or long dashes
-    const fallbackSplit = cleaned.split(/[.!?;]\s+|\s*[–—]\s*|\s*\|\s*/).map((s) => s.trim()).filter((s) => s.length > 10);
-    if (fallbackSplit.length > sentenceSplit.length) return fallbackSplit;
-  }
-
-  return sentenceSplit;
+/** Strip markdown syntax to get plain text for sentence splitting. */
+function stripMarkdown(text: string): string {
+  return text
+    // Remove images ![alt](url)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    // Replace links [text](url) with just text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    // Remove bold/italic markers
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, "$1")
+    .replace(/_{1,3}([^_]+)_{1,3}/g, "$1")
+    // Remove headings markers
+    .replace(/^#{1,6}\s+/gm, "")
+    // Remove horizontal rules
+    .replace(/^[-*_]{3,}\s*$/gm, "")
+    // Remove code blocks
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`([^`]+)`/g, "$1")
+    // Remove HTML tags
+    .replace(/<[^>]+>/g, "")
+    // Normalize whitespace
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-/** Extractive summarization — robust version that handles sparse/nav content. */
-function extractiveSummarize(text: string, maxSentences = 5): string[] {
-  const segments = splitIntoSegments(text);
+/** Split text into sentence-like segments, handling various content types. */
+function splitIntoSegments(rawText: string): string[] {
+  const text = stripMarkdown(rawText);
+  const cleaned = text.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
 
-  // Accept segments from 15 to 600 chars (much more lenient than before)
-  const candidates = segments.filter((s) => s.length >= 15 && s.length <= 600);
+  if (!cleaned) return [];
 
-  // If very short content, return it directly
-  if (text.trim().length < 200) {
-    return [text.trim()];
+  // Split on sentence-ending punctuation followed by space/uppercase
+  let segments = cleaned
+    .split(/(?<=[.!?])\s+(?=[A-Z"'\u201c(])|(?<=[.!?])\s{2,}/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // If that didn't produce enough segments, try simpler split
+  if (segments.length < 3) {
+    segments = cleaned
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
 
-  // If no candidates pass the filter, fallback: take the first N non-empty chunks
-  if (candidates.length === 0) {
-    const fallback = text
+  // If still too few, split on newlines from original text
+  if (segments.length < 3) {
+    const nlSegments = text
       .split(/\n+/)
       .map((s) => s.trim())
-      .filter((s) => s.length > 10)
-      .slice(0, maxSentences);
-    return fallback.length > 0 ? fallback : [text.slice(0, 500).trim()];
+      .filter((s) => s.length > 10);
+    if (nlSegments.length > segments.length) {
+      segments = nlSegments;
+    }
+  }
+
+  // Break any oversized segments (>600 chars) into smaller chunks
+  const result: string[] = [];
+  for (const seg of segments) {
+    if (seg.length <= 600) {
+      result.push(seg);
+    } else {
+      // Try to split on sentence boundaries within the segment
+      const subParts = seg.split(/(?<=[.!?])\s+/).filter(Boolean);
+      if (subParts.length > 1) {
+        result.push(...subParts);
+      } else {
+        // Split on commas or semicolons as last resort
+        const commaParts = seg.split(/[,;]\s+/).filter((s) => s.length > 15);
+        if (commaParts.length > 1) {
+          result.push(...commaParts);
+        } else {
+          // Just truncate
+          result.push(seg.slice(0, 600));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Extractive summarization. */
+function extractiveSummarize(text: string, maxSentences = 5): string[] {
+  // Very short content: return as-is
+  if (text.trim().length < 200) {
+    return [stripMarkdown(text.trim())];
+  }
+
+  const segments = splitIntoSegments(text);
+  const candidates = segments.filter((s) => s.length >= 15 && s.length <= 600);
+
+  // No candidates after all splitting: hard fallback
+  if (candidates.length === 0) {
+    const plain = stripMarkdown(text);
+    const lines = plain.split(/\n+/).map((s) => s.trim()).filter((s) => s.length > 15);
+    if (lines.length > 0) return lines.slice(0, maxSentences);
+    return [plain.slice(0, 500).trim()];
   }
 
   if (candidates.length <= maxSentences) return candidates;
 
-  // Score each segment
+  // Score each segment by word frequency
   const wordFreq: Record<string, number> = {};
   for (const s of candidates) {
     for (const w of s.toLowerCase().split(/\W+/)) {
@@ -73,35 +133,30 @@ function extractiveSummarize(text: string, maxSentences = 5): string[] {
     return { sentence: s, idx, score: freqScore * positionBoost * lengthBoost };
   });
 
-  const top = scored
+  return scored
     .sort((a, b) => b.score - a.score)
     .slice(0, maxSentences)
-    .sort((a, b) => a.idx - b.idx);
-
-  return top.map((t) => t.sentence);
+    .sort((a, b) => a.idx - b.idx)
+    .map((t) => t.sentence);
 }
 
-/** Extract key bullet points — robust version. */
+/** Extract key bullet points. */
 function extractKeyPoints(text: string, max = 5): string[] {
   const segments = splitIntoSegments(text);
   const candidates = segments.filter((s) => s.length >= 15 && s.length <= 400);
 
   if (candidates.length === 0) {
-    // Fallback: split by newlines
-    return text
-      .split(/\n+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 10)
-      .slice(0, max);
+    const plain = stripMarkdown(text);
+    return plain.split(/\n+/).map((s) => s.trim()).filter((s) => s.length > 15).slice(0, max);
   }
 
   const signalWords = [
-    "important", "key", "significant", "major", "critical", "essential",
-    "found", "discovered", "revealed", "showed", "demonstrated",
-    "according", "research", "study", "data", "evidence",
-    "new", "first", "largest", "best", "most",
-    "conclusion", "result", "impact", "effect", "change",
-    "percent", "%", "million", "billion",
+    "important","key","significant","major","critical","essential",
+    "found","discovered","revealed","showed","demonstrated",
+    "according","research","study","data","evidence",
+    "new","first","largest","best","most",
+    "conclusion","result","impact","effect","change",
+    "percent","%","million","billion",
   ];
 
   const scored = candidates.map((s, idx) => {
