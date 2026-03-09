@@ -208,6 +208,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Could not extract enough content from this URL" }, { status: 422 });
     }
 
+    // Detect extract-level error messages passed through as content
+    if (content.startsWith("Could not extract")) {
+      return NextResponse.json({ success: false, error: content }, { status: 422 });
+    }
+
     const truncated = content.slice(0, 3000);
 
     const summary = extractiveSummarize(truncated, 5);
